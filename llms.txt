@@ -1,0 +1,13 @@
+# portkill
+
+> Find what is listening on a port, see exactly what it is, and free the port safely (macOS, Linux, Windows, Docker-aware).
+
+portkill is a single static Go binary. `portkill PORT` shows every process listening on the port (PID, parent, user, working directory, masked command line, uptime), asks, sends SIGTERM, waits for the port to be released, offers SIGKILL only if needed, and verifies the port is free. It refuses PID 1, its own parent, other users' processes and Docker's port forwarder (pointing at `docker stop` instead).
+
+Agents: use `portkill --dry-run --json PORT` to inspect, `portkill --list --json` to list, and `portkill --yes --json PORT` to kill. Exit codes: 0 freed, 1 nothing listening, 2 error or still busy, 3 refused or declined. `portkill --mcp` runs an MCP server with read-only tools `portkill_inspect` and `portkill_list`; `--allow-destructive` adds `portkill_kill`, which only kills a PID that is still listening on the given port.
+
+## Docs
+
+- [README](https://github.com/Mr-hunt-007/portkill/blob/main/README.md): install, usage, flags, JSON shape, exit codes, MCP setup, limitations
+- [AGENTS.md](https://github.com/Mr-hunt-007/portkill/blob/main/AGENTS.md): layout, build and test commands, contributor rules
+- [SKILL.md](https://github.com/Mr-hunt-007/portkill/blob/main/skills/portkill/SKILL.md): Agent Skill for using portkill from a coding agent

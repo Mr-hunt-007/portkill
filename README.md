@@ -137,7 +137,7 @@ Port 8021 (tcp, listening)
     !  PID 1 is the init process; refusing to signal it
 ```
 
-It also refuses portkill itself, the shell that started it, the Windows System
+It also refuses portkill itself, the shell (or agent) that started it, the Windows System
 process (PID 4), processes owned by another user unless you run it with sudo,
 and listeners whose owner you cannot see. When the listener is Docker's port
 forwarder (`com.docker.backend`, `com.docker.vpnkit`, `vpnkit`, `docker-proxy`,
@@ -161,6 +161,107 @@ PORT   PROTO  PID    USER    PROCESS               ADDRESS
 (Output trimmed.) Port 8000 above is one socket shared by a parent and a
 forked child; both PIDs are shown because killing only one would not free it.
 
+## Use with AI agents
+
+The CLI already works well for coding agents: `--json` output with a stable
+shape and documented exit codes. portkill also runs as an
+[MCP](https://modelcontextprotocol.io) server on stdio with `portkill --mcp`.
+
+The client starts the server itself, so `portkill` must be on the `PATH` the
+client sees. GUI apps often do not inherit your shell's `PATH`; if the server
+fails to start, use the absolute path of the binary (for example the output
+of `echo "$(go env GOPATH)/bin/portkill"`) as the command.
+
+Claude Code (add `--scope user` to enable it in every project):
+
+```
+claude mcp add portkill -- portkill --mcp
+```
+
+Codex CLI:
+
+```
+codex mcp add portkill -- portkill --mcp
+```
+
+or in `~/.codex/config.toml`:
+
+```toml
+[mcp_servers.portkill]
+command = "portkill"
+args = ["--mcp"]
+```
+
+Cursor, in `.cursor/mcp.json` (or `~/.cursor/mcp.json` for all projects):
+
+```json
+{
+  "mcpServers": {
+    "portkill": { "command": "portkill", "args": ["--mcp"] }
+  }
+}
+```
+
+VS Code, in `.vscode/mcp.json`:
+
+```json
+{
+  "servers": {
+    "portkill": { "type": "stdio", "command": "portkill", "args": ["--mcp"] }
+  }
+}
+```
+
+Gemini CLI, in `~/.gemini/settings.json`:
+
+```json
+{
+  "mcpServers": {
+    "portkill": { "command": "portkill", "args": ["--mcp"] }
+  }
+}
+```
+
+Tools:
+
+| Tool | Kind | What it answers |
+| --- | --- | --- |
+| `portkill_inspect` | read-only | What is listening on these ports (`ports`: `["3000", "8000-8010"]`, `udp`), with the same details and JSON as `--dry-run --json`, including refusals and the Docker hint. At most 100 ports per call. |
+| `portkill_list` | read-only | Every listener, as `--list --json`. Capped at 200 entries by default (`limit`); a cut list adds `"total"` and `"truncated"`. |
+| `portkill_kill` | destructive | Stops one process: `port` and `pid` (both required), `signal`, `force`, `timeout`. Returns the same JSON as `--yes --json PORT`. Only offered with `--allow-destructive`. |
+
+By default the server only offers the read-only tools. To let an agent kill
+processes, start it with `portkill --mcp --allow-destructive` (for example
+`claude mcp add portkill -- portkill --mcp --allow-destructive`).
+`portkill_kill` then acts immediately, without a confirmation prompt, so only
+enable it for agents you trust with that. It is still limited:
+
+- The kill only goes ahead if the given PID is listening on that port at the
+  moment of the call, so a process that took the port after the agent looked
+  is never hit. Other processes on the same port are left alone.
+- Every CLI refusal applies: owner not visible (PID 0), PID 1, the Windows
+  System process, portkill itself and the agent that started it, other users'
+  processes (unless run as root), and Docker's port forwarder.
+- SIGKILL is only sent when `force` is true. The port is checked again
+  afterwards and `result` is `freed` only if it is really free.
+
+Command lines stay masked over MCP exactly as in the CLI.
+
+An [Agent Skill](skills/portkill/SKILL.md) teaches agents to use the CLI
+directly. Install it for Claude Code:
+
+```
+mkdir -p ~/.claude/skills && cp -r skills/portkill ~/.claude/skills/
+```
+
+and for Codex CLI:
+
+```
+mkdir -p ~/.agents/skills && cp -r skills/portkill ~/.agents/skills/
+```
+
+Agents working on this repository should read [AGENTS.md](AGENTS.md).
+
 ## Flags
 
 | Flag | Default | Meaning |
@@ -174,6 +275,8 @@ forked child; both PIDs are shown because killing only one would not free it.
 | `-l`, `--list` | off | List listeners (all, or only the given ports). |
 | `--json` | off | Print JSON to stdout. Prompts, if any, go to stderr. |
 | `--no-color` | off | Disable colour. `NO_COLOR` is honoured; colour is only used on a terminal. |
+| `--mcp` | off | Run an MCP server on stdio for AI agents (see above). Other flags and ports are ignored. |
+| `--allow-destructive` | off | With `--mcp`, also offer `portkill_kill`, which kills without a prompt. |
 | `--version` | | Print the version. |
 | `-h`, `--help` | | Show help with examples. |
 

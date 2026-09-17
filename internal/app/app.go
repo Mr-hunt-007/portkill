@@ -20,7 +20,7 @@ import (
 )
 
 // Version is the release version.
-const Version = "0.1.0"
+const Version = "0.2.0"
 
 // Exit codes.
 const (
@@ -56,13 +56,21 @@ type Env struct {
 	Home      string
 	// ParseSignal validates --signal for the current OS.
 	ParseSignal func(string) (string, error)
+	// ServeMCP runs the MCP server on stdio for --mcp and returns the exit
+	// code. It is nil in tests that do not exercise --mcp.
+	ServeMCP func(allowDestructive bool) int
 }
 
 type options struct {
 	udp, list, json, dryRun, yes, force, noColor, version, help bool
+	mcp, allowDestructive                                       bool
 	signal                                                      string
 	timeout                                                     time.Duration
 	ports                                                       []int
+	// pinned restricts a kill to pid (MCP only). Other processes on the
+	// port are left alone, and nothing is signalled if pid is not listening.
+	pinned bool
+	pid    int
 }
 
 const usage = `portkill: find what is listening on a port and free it.
@@ -80,6 +88,7 @@ Examples:
   portkill --udp 5353           UDP instead of TCP
   portkill --list               all listening TCP ports
   portkill --json 3000 --yes    machine readable result
+  portkill --mcp                MCP server on stdio for AI agents (read-only tools)
 
 Flags:
   -y, --yes            answer yes to the kill prompt (does not imply SIGKILL)
@@ -92,6 +101,11 @@ Flags:
   -l, --list           list listening ports instead of killing
       --json           print JSON to stdout
       --no-color       disable colour (NO_COLOR is also honoured)
+      --mcp            run an MCP server on stdio (tools: portkill_inspect,
+                       portkill_list); other flags and ports are ignored
+      --allow-destructive
+                       with --mcp, also offer portkill_kill, which kills
+                       without a confirmation prompt
       --version        print version
   -h, --help           show this help
 
@@ -146,6 +160,8 @@ func parseOptions(args []string, env Env) (options, error) {
 	fs.BoolVar(&o.version, "version", false, "")
 	fs.BoolVar(&o.help, "help", false, "")
 	fs.BoolVar(&o.help, "h", false, "")
+	fs.BoolVar(&o.mcp, "mcp", false, "")
+	fs.BoolVar(&o.allowDestructive, "allow-destructive", false, "")
 	fs.StringVar(&o.signal, "signal", "TERM", "")
 	fs.DurationVar(&o.timeout, "timeout", 5*time.Second, "")
 	flags, pos := splitArgs(args)
@@ -153,6 +169,12 @@ func parseOptions(args []string, env Env) (options, error) {
 		return o, err
 	}
 	if o.help || o.version {
+		return o, nil
+	}
+	if o.allowDestructive && !o.mcp {
+		return o, errors.New("--allow-destructive only applies together with --mcp")
+	}
+	if o.mcp {
 		return o, nil
 	}
 	if o.timeout <= 0 {
@@ -188,6 +210,13 @@ func Run(args []string, env Env) int {
 	if o.version {
 		fmt.Fprintf(env.Stdout, "portkill %s\n", Version)
 		return 0
+	}
+	if o.mcp {
+		if env.ServeMCP == nil {
+			fmt.Fprintln(env.Stderr, "portkill: MCP server not available in this build")
+			return ExitError
+		}
+		return env.ServeMCP(o.allowDestructive)
 	}
 	r := &runner{o: o, env: env}
 	r.color = env.StdoutTTY && !o.noColor && !o.json && env.Getenv("NO_COLOR") == ""
@@ -241,11 +270,36 @@ type ListEntry struct {
 	Addresses []string `json:"addresses"`
 }
 
+// ListReport is the JSON document printed by --list --json.
+type ListReport struct {
+	Listeners []*ListEntry `json:"listeners"`
+}
+
 func (r *runner) list() int {
-	socks, notes, err := r.env.Sys.Listeners(r.proto(), r.o.ports)
+	entries, err := r.collectList()
 	if err != nil {
 		fmt.Fprintf(r.env.Stderr, "portkill: %v\n", err)
 		return ExitError
+	}
+	if r.o.json {
+		writeJSON(r.env.Stdout, ListReport{entries})
+	} else if len(entries) == 0 {
+		fmt.Fprintf(r.out, "No listening %s ports.\n", strings.ToUpper(r.proto()))
+	} else {
+		r.renderList(entries)
+	}
+	if len(entries) == 0 {
+		return ExitNotListening
+	}
+	return 0
+}
+
+// collectList discovers listeners and groups sockets into one entry per
+// port and PID, sorted by port then PID. The slice is never nil.
+func (r *runner) collectList() ([]*ListEntry, error) {
+	socks, notes, err := r.env.Sys.Listeners(r.proto(), r.o.ports)
+	if err != nil {
+		return nil, err
 	}
 	for _, n := range notes {
 		fmt.Fprintf(r.env.Stderr, "portkill: %s\n", n)
@@ -254,7 +308,7 @@ func (r *runner) list() int {
 	details := r.env.Sys.Details(pids)
 	type key struct{ port, pid int }
 	idx := map[key]*ListEntry{}
-	var entries []*ListEntry
+	entries := []*ListEntry{}
 	for _, s := range socks {
 		k := key{s.Port, s.PID}
 		e := idx[k]
@@ -282,22 +336,7 @@ func (r *runner) list() int {
 		}
 		return entries[i].PID < entries[j].PID
 	})
-	if r.o.json {
-		if entries == nil {
-			entries = []*ListEntry{}
-		}
-		writeJSON(r.env.Stdout, struct {
-			Listeners []*ListEntry `json:"listeners"`
-		}{entries})
-	} else if len(entries) == 0 {
-		fmt.Fprintf(r.out, "No listening %s ports.\n", strings.ToUpper(r.proto()))
-	} else {
-		r.renderList(entries)
-	}
-	if len(entries) == 0 {
-		return ExitNotListening
-	}
-	return 0
+	return entries, nil
 }
 
 func (r *runner) renderList(entries []*ListEntry) {

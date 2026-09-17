@@ -245,7 +245,7 @@ func TestSafetyRefusals(t *testing.T) {
 	}{
 		{"pid1", func(f *fakeSys) { f.add(8021, 1, "launchd", "root") }, "PID 1 is the init process"},
 		{"self", func(f *fakeSys) { f.add(8021, 999, "portkill", "dev") }, "portkill itself"},
-		{"parent shell", func(f *fakeSys) { f.add(8021, 998, "python3", "dev") }, "shell running portkill"},
+		{"parent shell", func(f *fakeSys) { f.add(8021, 998, "python3", "dev") }, "process that started portkill"},
 		{"other user", func(f *fakeSys) { f.add(8021, 70, "nginx", "root") }, "owned by user root, not dev; run with sudo"},
 		{"unknown owner", func(f *fakeSys) {
 			f.socks = append(f.socks, parse.Socket{Proto: "tcp", Host: "*", Port: 8021})
@@ -309,7 +309,7 @@ func TestDockerHint(t *testing.T) {
 	f2.add(8080, 301, "docker-proxy", "dev")
 	f2.setDocker("", errors.New("docker CLI not found"))
 	r = run(t, f2, "", false, "--json", "8080")
-	var got killJSON
+	var got Report
 	if err := json.Unmarshal([]byte(r.stdout), &got); err != nil {
 		t.Fatal(err)
 	}
@@ -670,7 +670,7 @@ func TestArgs(t *testing.T) {
 		stderr  string
 		comment string
 	}{
-		{args: []string{"--version"}, code: 0, stdout: "portkill 0.1.0\n"},
+		{args: []string{"--version"}, code: 0, stdout: "portkill 0.2.0\n"},
 		{args: []string{"-h"}, code: 0, stdout: "Usage:"},
 		{args: []string{}, code: ExitError, stderr: "no port given"},
 		{args: []string{"99999"}, code: ExitError, stderr: "between 1 and 65535"},

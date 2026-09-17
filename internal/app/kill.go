@@ -60,14 +60,21 @@ type PortReport struct {
 }
 
 func (r *runner) kill() int {
+	rep := r.collect()
+	if r.o.json {
+		writeJSON(r.env.Stdout, rep)
+	}
+	return rep.ExitCode
+}
+
+// collect runs discovery and the per-port flow and returns the report that
+// --json prints. Human readable text goes to r.out as it happens.
+func (r *runner) collect() Report {
 	proto := r.proto()
 	socks, notes, err := r.env.Sys.Listeners(proto, r.o.ports)
 	if err != nil {
 		fmt.Fprintf(r.env.Stderr, "portkill: %v\n", err)
-		if r.o.json {
-			writeJSON(r.env.Stdout, killJSON{Ports: []*PortReport{}, Error: err.Error(), ExitCode: ExitError})
-		}
-		return ExitError
+		return Report{Ports: []*PortReport{}, Error: err.Error(), ExitCode: ExitError}
 	}
 	for _, n := range notes {
 		fmt.Fprintf(r.env.Stderr, "portkill: %s\n", n)
@@ -78,7 +85,7 @@ func (r *runner) kill() int {
 		byPort[s.Port] = append(byPort[s.Port], s)
 	}
 
-	var reports []*PortReport
+	reports := []*PortReport{}
 	var idle []int
 	printed := 0
 	for _, port := range r.o.ports {
@@ -104,14 +111,11 @@ func (r *runner) kill() int {
 		}
 		fmt.Fprintln(r.out, r.paint(dim, fmt.Sprintf("Nothing listening on %s %s %s.", proto, plural(len(idle) > 1, "port", "ports"), compactPorts(idle))))
 	}
-	code := exitCode(reports)
-	if r.o.json {
-		writeJSON(r.env.Stdout, killJSON{Ports: reports, ExitCode: code})
-	}
-	return code
+	return Report{Ports: reports, ExitCode: exitCode(reports)}
 }
 
-type killJSON struct {
+// Report is the JSON document printed by portkill --json (without --list).
+type Report struct {
 	Ports    []*PortReport `json:"ports"`
 	Error    string        `json:"error,omitempty"`
 	ExitCode int           `json:"exit_code"`
@@ -215,7 +219,7 @@ func (r *runner) classify(port int, p *ProcReport, d *sys.Proc) {
 	case p.PID == self:
 		p.Refusal = "that is portkill itself"
 	case p.PID == parent:
-		p.Refusal = "that is the shell running portkill; refusing to kill it"
+		p.Refusal = "that is the process that started portkill (your shell, or the agent running portkill --mcp); refusing to kill it"
 	case parse.DockerListener(p.Name):
 		p.Refusal = "this is the container runtime's port forwarder, not your app; killing it breaks every published port"
 		p.Docker = r.dockerHint(port)
@@ -266,6 +270,25 @@ func (r *runner) handlePort(port int, socks []parse.Socket, details map[int]*sys
 		if p.Killable {
 			killable = append(killable, p)
 		}
+	}
+	if r.o.pinned {
+		var target *ProcReport
+		for _, p := range rep.Processes {
+			if p.PID == r.o.pid {
+				target = p
+			}
+		}
+		switch {
+		case target == nil:
+			rep.Result = ResultRefused
+			rep.Message = fmt.Sprintf("PID %d is not listening on %s port %d (it is held by %s); nothing was signalled", r.o.pid, proto, port, pidList(rep.Processes))
+			return rep
+		case !target.Killable:
+			rep.Result = ResultRefused
+			rep.Message = fmt.Sprintf("PID %d will not be killed: %s", target.PID, target.Refusal)
+			return rep
+		}
+		killable = []*ProcReport{target}
 	}
 	if len(killable) == 0 {
 		rep.Result = ResultRefused
@@ -348,7 +371,9 @@ func (r *runner) terminate(rep *PortReport, killable []*ProcReport) *PortReport 
 		}
 		if !escalate {
 			hint := "not sending SIGKILL"
-			if !r.env.StdinTTY {
+			if r.o.pinned {
+				hint = "not sending SIGKILL because force is false"
+			} else if !r.env.StdinTTY {
 				hint = "not sending SIGKILL without --force"
 			}
 			fmt.Fprintln(r.out, strings.ToUpper(hint[:1])+hint[1:]+".")
