@@ -96,11 +96,17 @@ type Server struct {
 }
 
 // JSONResult returns v as both pretty JSON text and structured content.
+// Characters such as &, < and > are kept as they are rather than escaped to
+// \u0026 and friends, so URLs and headers stay readable to the model.
 func JSONResult(v any) (Result, error) {
-	b, err := json.MarshalIndent(v, "", "  ")
-	if err != nil {
+	var buf bytes.Buffer
+	enc := json.NewEncoder(&buf)
+	enc.SetEscapeHTML(false)
+	enc.SetIndent("", "  ")
+	if err := enc.Encode(v); err != nil {
 		return Result{}, err
 	}
+	b := bytes.TrimRight(buf.Bytes(), "\n")
 	var structured any
 	if len(b) > 0 && b[0] == '{' {
 		structured = json.RawMessage(b)

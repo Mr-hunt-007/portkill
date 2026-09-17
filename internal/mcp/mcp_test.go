@@ -228,3 +228,16 @@ func TestDecodeEmpty(t *testing.T) {
 		}
 	}
 }
+
+func TestJSONResultKeepsURLsReadable(t *testing.T) {
+	res, err := JSONResult(map[string]any{"path": "/posts?a=1&b=<2>", "raw": json.RawMessage(`{"link":"<http://x/?a=1&b=2>"}`)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(res.Text, `\u0026`) || !strings.Contains(res.Text, `"/posts?a=1&b=<2>"`) || !strings.Contains(res.Text, `"<http://x/?a=1&b=2>"`) {
+		t.Fatalf("escaped output: %s", res.Text)
+	}
+	if !json.Valid(res.Structured.(json.RawMessage)) {
+		t.Fatalf("structured is not valid JSON")
+	}
+}
