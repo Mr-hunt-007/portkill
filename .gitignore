@@ -1,0 +1,5 @@
+/portkill
+/portkill.exe
+/dist/
+*.test
+*.out
