@@ -1,6 +1,7 @@
 package sys
 
 import (
+	"errors"
 	"reflect"
 	"runtime"
 	"strings"
@@ -98,6 +99,25 @@ func TestBaseName(t *testing.T) {
 	} {
 		if got := baseName(in); got != want {
 			t.Errorf("baseName(%q) = %q", in, got)
+		}
+	}
+}
+
+func TestClassifyTaskkill(t *testing.T) {
+	base := errors.New("taskkill: exit status 1: ERROR: The process with PID 8912 could not be terminated.")
+	cases := []struct {
+		signal, output string
+		want           error
+	}{
+		{"TERM", "ERROR: The process with PID 8912 could not be terminated.\nReason: This process can only be terminated forcefully (with /F option).", ErrNoGraceful},
+		{"TERM", "ERROR: The process with PID 8912 could not be terminated.", ErrNoGraceful},
+		{"KILL", "ERROR: The process with PID 8912 could not be terminated.\nReason: Access is denied.", ErrPermission},
+		{"TERM", `ERROR: The process "8912" not found.`, ErrGone},
+		{"KILL", "ERROR: The process with PID 8912 could not be terminated.", base},
+	}
+	for _, c := range cases {
+		if got := classifyTaskkill(c.signal, c.output, base); got != c.want {
+			t.Errorf("classifyTaskkill(%s, %q) = %v, want %v", c.signal, c.output, got, c.want)
 		}
 	}
 }

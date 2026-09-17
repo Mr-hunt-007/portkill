@@ -43,6 +43,14 @@ const cmdTimeout = 15 * time.Second
 // returned as an error together with whatever was printed, because several
 // tools (lsof, ps) exit 1 while still producing useful output.
 func run(name string, args ...string) (string, error) {
+	out, _, err := runFull(name, args...)
+	return out, err
+}
+
+// runFull is run that also returns the complete stderr. The error only
+// carries its first line, which is not enough for tools such as taskkill
+// that put the reason on a later line.
+func runFull(name string, args ...string) (string, string, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), cmdTimeout)
 	defer cancel()
 	cmd := exec.CommandContext(ctx, name, args...)
@@ -58,7 +66,7 @@ func run(name string, args ...string) (string, error) {
 			err = fmt.Errorf("%s: %w", name, err)
 		}
 	}
-	return stdout.String(), err
+	return stdout.String(), stderr.String(), err
 }
 
 func firstLine(s string) string {

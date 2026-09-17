@@ -35,3 +35,23 @@ func ParseSignal(s string) (string, error) {
 	}
 	return "", fmt.Errorf("unsupported signal %q (supported: %s)", s, strings.Join(signalNames(), ", "))
 }
+
+// classifyTaskkill maps a failed taskkill run to the package errors. output
+// is taskkill's complete stdout and stderr: the reason is often on the line
+// after "ERROR: The process with PID N could not be terminated.", for example
+// "Reason: This process can only be terminated forcefully (with /F option)."
+// A console process with no window never accepts a graceful close, and
+// taskkill sometimes omits the reason line entirely, so a plain "could not
+// be terminated" on a graceful request counts as no graceful close too.
+func classifyTaskkill(signal, output string, err error) error {
+	msg := strings.ToLower(output + " " + err.Error())
+	switch {
+	case strings.Contains(msg, "not found"):
+		return ErrGone
+	case strings.Contains(msg, "access is denied"):
+		return ErrPermission
+	case signal == "TERM" && (strings.Contains(msg, "forcefully") || strings.Contains(msg, "could not be terminated")):
+		return ErrNoGraceful
+	}
+	return err
+}
